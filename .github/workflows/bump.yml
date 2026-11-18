@@ -1,0 +1,45 @@
+name: Bump to latest release
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update pkgver, checksums and .SRCINFO
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view -R soyeb-jim285/hyprfm --json tagName -q .tagName)
+          ver=${tag#v}
+          if grep -qx "pkgver=$ver" PKGBUILD; then
+            echo "Already at $ver"
+            exit 0
+          fi
+          sed -i "s/^pkgver=.*/pkgver=$ver/;s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          docker run --rm -v "$PWD:/pkg" archlinux:base-devel bash -c '
+            set -e
+            pacman -Sy --noconfirm --needed pacman-contrib >/dev/null
+            useradd -u "$(stat -c %u /pkg)" -m builder
+            cd /pkg
+            runuser -u builder -- sh -c "updpkgsums && makepkg --printsrcinfo > .SRCINFO"'
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Commit
+        if: steps.bump.outputs.ver
+        env:
+          VER: ${{ steps.bump.outputs.ver }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update to $VER" PKGBUILD .SRCINFO
+          git push
